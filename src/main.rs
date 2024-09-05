@@ -2,7 +2,7 @@ use std::env;
 use std::fs::File;
 use std::io::{self, BufRead};
 
-use tokio::task;
+use futures::TryStreamExt;
 use reqwest::{Client, StatusCode};
 use futures::stream::{self, StreamExt};
 
@@ -10,9 +10,6 @@ async fn fuzz_url(client: &Client, url: &str) -> Result<(String, StatusCode), re
     let res = client.get(url).send().await;
     let result = match res {
         Ok(res) => {
-            if res.status() == StatusCode::OK{
-                println!("Status: {} returned by {}", res.status(), &url);
-            }
             Ok((url.to_string(), res.status()))
         }
         Err(err) => {
@@ -35,19 +32,25 @@ async fn main() {
 
     let client = Client::new();
 
-    let tasks = stream::iter(wordlist.into_iter().map(|word| {
+    let tasks: Result<Vec<_>, _> = stream::iter(wordlist.into_iter().map(|word| {
         let client = client.clone();
         let url = format!("{}{}", &host, &word.unwrap());
 
-        task::spawn(async move {
-            fuzz_url(&client, &url).await;
+        tokio::spawn(async move {
+            fuzz_url(&client, &url).await
         })
     }))
-    .buffer_unordered(500);
+    .buffer_unordered(100)
+    .try_collect()
+    .await;
 
-    tasks.collect::<Vec<_>>().await;
-    // let responses: Vec<Result<Result<(StatusCode, String), reqwest::Error>, tokio::task::JoinError>> = tasks.collect::<Vec<_>>().await;
-    // let resposes: Vec<Result<(String, StatusCode), _>> = tasks.collect()::<Vec<_>>().await;
+    if let Ok(results) = tasks {
+        for result in results {
+            if let Ok((url, status)) = result {
+                println!("Status {} returned by {}", status, url);
+            }
+        }
+    }
 
     println!("Done...");
 
