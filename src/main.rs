@@ -1,5 +1,6 @@
 mod fuzzer;
 mod gui;
+mod constants;
 
 use std::env;
 use std::io::{ self };
