@@ -3,7 +3,7 @@ use std::sync::{ Arc, Mutex };
 use std::io::{ self };
 
 use ratatui::prelude::*;
-use reqwest::StatusCode;
+use reqwest::{header, StatusCode};
 
 use crossterm::event::{ self, Event, KeyCode, KeyEvent, KeyEventKind };
 use ratatui::{
@@ -68,14 +68,6 @@ impl Gui {
             ]
         ).split(f.area());
 
-        let header_layout = Layout::horizontal(
-            vec![
-                Constraint::Percentage(30),
-                Constraint::Percentage(30),
-                Constraint::Percentage(40)
-            ]
-        ).split(root_layout[0]);
-
         let body_layout = Layout::horizontal(
             vec![
                 Constraint::Percentage(60),
@@ -83,29 +75,31 @@ impl Gui {
             ]
         ).split(root_layout[1]);
 
-        let settings_layout = Layout::vertical(
+        let input_layout = Layout::vertical(
             vec![
-                Constraint::Percentage(10),
-                Constraint::Percentage(10),
-                Constraint::Percentage(50),
-                Constraint::Percentage(30),
+                Constraint::Percentage(10), // target input
+                Constraint::Percentage(10), // wordlist input
+                Constraint::Percentage(50), // data/header input
+                Constraint::Percentage(30), // filter/match input
             ]
-        ).split(body_layout[0]);
-
-        let dh_layout = Layout::horizontal(
-            vec![
-                Constraint::Percentage(50),
-                Constraint::Percentage(50),
-            ]
-        ).split(settings_layout[3]);
+        ).split(root_layout[1]);
 
         let fm_layout = Layout::horizontal(
             vec![
                 Constraint::Percentage(50),
                 Constraint::Percentage(50),
             ]
-        ).split(settings_layout[2]);
+        ).split(input_layout[2]);
 
+
+        let dh_layout = Layout::horizontal(
+            vec![
+                Constraint::Percentage(50),
+                Constraint::Percentage(50),
+            ]
+        ).split(input_layout[3]);
+
+        // this can be moved to future 'rightwidget' or whatever
         let right_body_layout = Layout::vertical(
             vec![
                 Constraint::Percentage(70),
@@ -113,19 +107,17 @@ impl Gui {
             ]
         ).split(body_layout[1]);
 
-        // This can be simplified by constructing the individual widgets within e.g. 'LeftBodyWidget' (similar to helpwidget rn)
         /* Header Bar */
-        f.render_widget(LogoWidget {}, header_layout[0]);
-        f.render_widget(ProgressWidget {}, header_layout[1]);
-        f.render_widget(StatsWidget {}, header_layout[2]);
+        // doesn't need to be stateful methinks
+        f.render_stateful_widget(HeaderWidget, root_layout[0], state);
 
         /* Body */
-        f.render_widget(EmptyWidget {title: state.host.to_string()}, settings_layout[0]);
-        f.render_widget(wordlist, settings_layout[1]);
-        f.render_widget(EmptyWidget {title: "Data".to_string()}, dh_layout[0]);
-        f.render_widget(EmptyWidget {title: "Headers".to_string()}, dh_layout[1]);
-        f.render_widget(EmptyWidget {title: "Match".to_string()}, fm_layout[0]);
-        f.render_widget(EmptyWidget {title: "Filter".to_string()}, fm_layout[1]);
+        // f.render_widget(targetinput{}, right_body_layout[1]);
+        // f.render_widget(wordlistinput{}, right_body_layout[1]);
+        // f.render_widget(datainput{}, right_body_layout[1]);
+        // f.render_widget(headerinput{}, right_body_layout[1]);
+        // f.render_widget(matchinput{}, right_body_layout[1]);
+        // f.render_widget(filterinput{}, right_body_layout[1]);
         f.render_widget(EmptyWidget {title: "Results".to_string()}, right_body_layout[0]);
         f.render_widget(HelpWidget {}, right_body_layout[1]);
     }
@@ -136,6 +128,7 @@ impl Gui {
             //     self.handle_key_event(key_event)
             // }
             Input {key: Key::Char('q'), ctrl: true, ..} => self.exit(),
+            Input {key: Key::Char('r'), ctrl: true, ..} => fuzzer::fuzz(&self.state.wordlist, &self.state.host, &self.state.query_results),
             input => {
                 wordlist.input(input);
             }
@@ -159,34 +152,27 @@ impl Gui {
     }
 }
 
-struct HeaderWidget {
-}
-
+struct HeaderWidget;
 impl StatefulWidget for HeaderWidget {
     type State = AppState;
 
     fn render(self, area: Rect, buf: &mut Buffer, state: &mut AppState) {
-        let block = Block::bordered()
-            .border_set(border::THICK);
 
-        let results = state.query_results.lock().unwrap();
-        let center_text = Text::from(
-            results.iter()
-                .filter(|x| x.1.eq(&StatusCode::OK))
-                .map(|(url, statuscode)| Line::from(format!(" {} => {} ", statuscode, url)))
-                .collect::<Vec<Line>>()
-        );
+        let header_layout = Layout::horizontal(
+            vec![
+                Constraint::Percentage(30),
+                Constraint::Percentage(30),
+                Constraint::Percentage(40)
+            ]
+        ).split(area);
 
-        Paragraph::new(center_text)
-            .centered()
-            .block(block)
-            .render(area, buf);
-        
+        LogoWidget {}.render(header_layout[0], buf);
+        ProgressWidget {}.render(header_layout[1], buf);
+        StatsWidget {}.render(header_layout[2], buf);
     }
 }
 
-struct LogoWidget {
-}
+struct LogoWidget;
 impl Widget for LogoWidget {
     fn render(self, area: Rect, buf: &mut Buffer) {
         let title = constants::LOGO.to_string();
@@ -202,7 +188,7 @@ impl Widget for LogoWidget {
     }
 }
 
-struct ProgressWidget {}
+struct ProgressWidget;
 impl Widget for ProgressWidget {
     fn render(self, area: Rect, buf: &mut Buffer){
         Paragraph::new("Progress")
@@ -212,7 +198,7 @@ impl Widget for ProgressWidget {
     }
 }
 
-struct StatsWidget {}
+struct StatsWidget;
 impl Widget for StatsWidget {
     fn render(self, area: Rect, buf: &mut Buffer){
         Paragraph::new("Stats")
@@ -234,24 +220,29 @@ impl Widget for HelpWidget {
         ).split(area);
 
         Paragraph::new(Text::from(vec![
-            Line::from(vec!["<r> ".bold().into(), " Run fuzzer ".into()]),
-            Line::from(vec!["<q> ".bold().into(), " Quit fuzzer ".into()]),
+            Line::from(vec!["<C-t> ".bold().into(), " Set Target ".into()]), // why does it need this?
+            Line::from(vec!["<C-t> ".bold().into(), " Set target ".into()]),
+            Line::from(vec!["<C-w> ".bold().into(), " Set wordlist ".into()]),
+            Line::from(vec!["<C-d> ".bold().into(), " Edit request data ".into()]),
+            Line::from(vec!["<C-h> ".bold().into(), " Edit request headers ".into()]),
+            Line::from(vec!["<C-m> ".bold().into(), " Edit matching rules ".into()]),
+            Line::from(vec!["<C-f> ".bold().into(), " Edit filter rules ".into()]),
+        ]))
+        .centered()
+        .render(layout[1], buf);
+
+        Paragraph::new(Text::from(vec![
+            Line::from(vec!["<C-r> ".bold().into(), " Run fuzzer ".into()]),
+            Line::from(vec!["<C-q> ".bold().into(), " Quit fuzzer ".into()]),
+            Line::from(vec!["<C-s> ".bold().into(), " Edit settings ".into()]),
         ]))
         .centered()
         .block(
                 Block::bordered()
-                .title(Title::from(" Help ".bold()).alignment(Alignment::Center))
+                .title(Title::from(" Help ".bold()).alignment(Alignment::Left))
                 .border_set(border::ROUNDED)
             )
         .render(layout[0], buf);
-
-        Paragraph::new(Text::from(vec![
-            Line::from(vec!["<t> ".bold().into(), " Set Target ".into()]), // why does it need this?
-            Line::from(vec!["<t> ".bold().into(), " Set Target ".into()]),
-            Line::from(vec!["<w> ".bold().into(), " Set Wordlist ".into()]),
-        ]))
-        .centered()
-        .render(layout[1], buf);
 
         Paragraph::new("")
         .block(
@@ -261,6 +252,23 @@ impl Widget for HelpWidget {
             )
         .render(area, buf)
 
+    }
+}
+
+struct InputWidget{
+    state: AppState,
+}
+impl StatefulWidget for InputWidget {
+    type State = AppState;
+    fn render(self, area:Rect, buf: &mut Buffer, state: &mut AppState){
+
+
+        EmptyWidget {title: state.host.to_string()}.render(settings_layout[0], buf);
+        state.wordlist.render(settings_layout[1], buf);
+        EmptyWidget {title: "Data".to_string()}.render(dh_layout[0], buf);
+        EmptyWidget {title: "Headers".to_string()}.render(dh_layout[1], buf);
+        EmptyWidget {title: "Match".to_string()}.render(fm_layout[0], buf);
+        EmptyWidget {title: "Filter".to_string()}.render(fm_layout[1], buf);
     }
 }
 
