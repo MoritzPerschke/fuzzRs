@@ -3,7 +3,7 @@ use std::sync::{ Arc, Mutex };
 use std::io::{ self };
 
 use ratatui::prelude::*;
-use reqwest::{header, StatusCode};
+use reqwest::StatusCode;
 
 use crossterm::event::{ self, Event, KeyCode, KeyEvent, KeyEventKind };
 use ratatui::{
@@ -14,11 +14,12 @@ use ratatui::{
     text::{Line, Text},
     widgets::{
         block::{ Position, Title },
-        Block, Paragraph, Widget,
+        Block, Paragraph, Widget, Borders
     },
     DefaultTerminal,
     Frame
 };
+use tui_textarea::{Input, Key, TextArea};
 
 use crate::fuzzer;
 use crate::constants;
@@ -44,20 +45,28 @@ impl Gui {
         state.wordlist = wordlist.to_string();
         state.host = host.to_string();
 
+        let mut wordlist = TextArea::default();
+        wordlist.set_block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title("Wordlist"),
+        );
+
         while !self.exit {
-            terminal.draw(|frame| self.draw(frame, &mut state))?;
-            self.handle_events()?;
+            terminal.draw(|frame| self.draw(frame, &mut state, &wordlist))?;
+            self.handle_events(&mut wordlist)?;
         }
         Ok(())
     }
     
-    fn draw(&self, frame: &mut Frame, state: &mut AppState) {
+    fn draw(&self, f: &mut Frame, state: &mut AppState, wordlist: &TextArea) {
+        /* Definitions of Layouts */
         let root_layout = Layout::vertical(
             vec![
                 Constraint::Percentage(20),
                 Constraint::Percentage(80)
             ]
-        ).split(frame.area());
+        ).split(f.area());
 
         let header_layout = Layout::horizontal(
             vec![
@@ -106,42 +115,45 @@ impl Gui {
 
         // This can be simplified by constructing the individual widgets within e.g. 'LeftBodyWidget' (similar to helpwidget rn)
         /* Header Bar */
-        frame.render_widget(LogoWidget {}, header_layout[0]);
-        frame.render_widget(ProgressWidget {}, header_layout[1]);
-        frame.render_widget(StatsWidget {}, header_layout[2]);
+        f.render_widget(LogoWidget {}, header_layout[0]);
+        f.render_widget(ProgressWidget {}, header_layout[1]);
+        f.render_widget(StatsWidget {}, header_layout[2]);
 
         /* Body */
-        frame.render_widget(EmptyWidget {title: state.host.to_string()}, settings_layout[0]);
-        frame.render_widget(EmptyWidget {title: state.wordlist.to_string()}, settings_layout[1]);
-        frame.render_widget(EmptyWidget {title: "Data".to_string()}, dh_layout[0]);
-        frame.render_widget(EmptyWidget {title: "Headers".to_string()}, dh_layout[1]);
-        frame.render_widget(EmptyWidget {title: "Match".to_string()}, fm_layout[0]);
-        frame.render_widget(EmptyWidget {title: "Filter".to_string()}, fm_layout[1]);
-        frame.render_widget(EmptyWidget {title: "Results".to_string()}, right_body_layout[0]);
-        frame.render_widget(HelpWidget {}, right_body_layout[1]);
+        f.render_widget(EmptyWidget {title: state.host.to_string()}, settings_layout[0]);
+        f.render_widget(wordlist, settings_layout[1]);
+        f.render_widget(EmptyWidget {title: "Data".to_string()}, dh_layout[0]);
+        f.render_widget(EmptyWidget {title: "Headers".to_string()}, dh_layout[1]);
+        f.render_widget(EmptyWidget {title: "Match".to_string()}, fm_layout[0]);
+        f.render_widget(EmptyWidget {title: "Filter".to_string()}, fm_layout[1]);
+        f.render_widget(EmptyWidget {title: "Results".to_string()}, right_body_layout[0]);
+        f.render_widget(HelpWidget {}, right_body_layout[1]);
     }
 
-    fn handle_events(&mut self) -> io::Result<()> {
-        match event::read()? {
-            Event::Key(key_event) if key_event.kind == KeyEventKind::Press => {
-                self.handle_key_event(key_event)
+    fn handle_events(&mut self, wordlist: &mut TextArea) -> io::Result<()> {
+        match crossterm::event::read()?.into() {
+            // Event::Key(key_event) if key_event.kind == KeyEventKind::Press => {
+            //     self.handle_key_event(key_event)
+            // }
+            Input {key: Key::Char('q'), ctrl: true, ..} => self.exit(),
+            input => {
+                wordlist.input(input);
             }
-            _ => {}
         };
         Ok(())
     }
 
-    fn handle_key_event(&mut self, key_event: KeyEvent) {
-        match key_event.code {
-            KeyCode::Char('r') =>  {
-                self.state.title = " FuzzRs (running...) ".to_string();
-                fuzzer::fuzz(&self.state.wordlist, &self.state.host, &self.state.query_results);
-            }
-            KeyCode::Char('q') =>  self.exit(),
-            _ => {}
-        }
-    }
-    
+    // fn handle_key_event(&mut self, key_event: KeyEvent) {
+    //     match key_event.code {
+    //         KeyCode::Char('r') =>  {
+    //             self.state.title = " FuzzRs (running...) ".to_string();
+    //             fuzzer::fuzz(&self.state.wordlist, &self.state.host, &self.state.query_results);
+    //         }
+    //         KeyCode::Char('q') =>  self.exit(),
+    //         _ => {}
+    //     }
+    // }
+
     fn exit(&mut self) {
         self.exit = true;
     }
