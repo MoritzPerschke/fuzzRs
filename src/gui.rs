@@ -1,12 +1,11 @@
 use std::collections::HashMap;
 use std::sync::{ Arc, Mutex };
 use std::io::{ self };
-use std::thread::current;
 
+use futures::{stream, StreamExt};
 use ratatui::prelude::*;
 use reqwest::{header, StatusCode};
 
-use crossterm::event::{ self, Event, KeyCode, KeyEvent, KeyEventKind };
 use ratatui::{
     buffer::Buffer,
     layout::{Alignment, Rect},
@@ -14,7 +13,7 @@ use ratatui::{
     symbols::border,
     text::{Line, Text},
     widgets::{
-        block::{ Position, Title },
+        block::Title,
         Block, Paragraph, Widget, Borders
     },
     DefaultTerminal,
@@ -33,18 +32,18 @@ pub struct Gui {
 
 #[derive(Debug, Default)]
 pub struct AppState {
-    title: String,
-    host: String,
+    target: String,
     wordlist: String,
+    data: String,
+    headers: String,
+    matchrules: String,
+    filterrules: String,
     query_results: Arc<Mutex<HashMap<String, StatusCode>>>,
 }
 
 impl Gui {
-    pub fn run(&mut self, terminal: &mut DefaultTerminal, wordlist: &str, host: &str) -> io::Result<()> {
+    pub fn run(&mut self, terminal: &mut DefaultTerminal) -> io::Result<()> {
         let mut state = AppState::default();
-        state.title = " FuzzRs ".to_string();
-        state.wordlist = wordlist.to_string();
-        state.host = host.to_string();
 
         /*
         * 0: Target
@@ -64,6 +63,7 @@ impl Gui {
         let mut current_input: usize = 0;
 
         for i in 0..input_fields.len(){
+            input_fields[i].1.set_cursor_style(Style::default());
             input_fields[i].1.set_block(
                 Block::default()
                     .borders(Borders::ALL)
@@ -131,7 +131,6 @@ impl Gui {
 
         /* Body */
         // Input fields are rendered here for convenience, as rendering them in a widget introduces
-        // some lifetime issues I don't want to deal with
         f.render_widget(&input_fields[0].1, input_layout[0]);
         f.render_widget(&input_fields[1].1, input_layout[1]);
         f.render_widget(&input_fields[2].1, dh_layout[0]);
@@ -145,7 +144,7 @@ impl Gui {
     fn handle_events(&mut self, input_fields: &mut [(&str, TextArea); 6], active_input: &mut usize) -> io::Result<()> {
         match crossterm::event::read()?.into() {
             Input {key: Key::Char('q'), ctrl: true, ..} => self.exit(),
-            Input {key: Key::Char('r'), ctrl: true, ..} => fuzzer::fuzz(&self.state.wordlist, &self.state.host, &self.state.query_results),
+            Input {key: Key::Char('r'), ctrl: true, ..} => fuzzer::fuzz(&self.state.wordlist, &self.state.target, &self.state.query_results),
             Input {key: Key::Char('t'), ctrl: true, ..} => self.change_active_input(input_fields, 0, active_input),
             Input {key: Key::Char('w'), ctrl: true, ..} => self.change_active_input(input_fields, 1, active_input),
             Input {key: Key::Char('d'), ctrl: true, ..} => self.change_active_input(input_fields, 2, active_input),
@@ -154,6 +153,9 @@ impl Gui {
             Input {key: Key::Char('f'), ctrl: true, ..} => self.change_active_input(input_fields, 5, active_input),
             input => {
                 input_fields[*active_input].1.input(input);
+                // match *active_input {
+                //     0 => stream::iter(input_fields[0].1.lines().into_iter().map(|line| {line.parse()})).collect::<Vec<String>>()
+                // }
             }
         };
         Ok(())
@@ -270,21 +272,6 @@ impl Widget for HelpWidget {
 
     }
 }
-
-// struct InputWidget{
-//     state: AppState,
-// }
-// impl StatefulWidget for InputWidget {
-//     type State = AppState;
-//     fn render(self, area:Rect, buf: &mut Buffer, state: &mut AppState){
-//         EmptyWidget {title: state.host.to_string()}.render(settings_layout[0], buf);
-//         state.wordlist.render(settings_layout[1], buf);
-//         EmptyWidget {title: "Data".to_string()}.render(dh_layout[0], buf);
-//         EmptyWidget {title: "Headers".to_string()}.render(dh_layout[1], buf);
-//         EmptyWidget {title: "Match".to_string()}.render(fm_layout[0], buf);
-//         EmptyWidget {title: "Filter".to_string()}.render(fm_layout[1], buf);
-//     }
-// }
 
 struct EmptyWidget {
     title: String,
