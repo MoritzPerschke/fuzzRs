@@ -1,75 +1,101 @@
-use std::io::{self, BufRead};
-use std::fs::File;
-use std::collections::HashMap;
+use std::fs::{self};
 use std::sync::{Arc, Mutex};
-use std::process;
 use rand::{distributions::Alphanumeric, Rng};
-use reqwest::{Client, StatusCode};
-use futures::stream::{self, StreamExt};
+use reqwest::header::HeaderMap;
+use reqwest::{Client, Method, StatusCode, Version};
 use tokio::runtime::Runtime;
 
-// Request fuzzing work
-async fn request_url(client: &Client, url: &str) -> Result<(String, StatusCode), reqwest::Error> {
-    let res = client.get(url).send().await;
-    let result = match res {
-        Ok(res) => {
-            Ok((url.to_string(), res.status()))
-        }
-        Err(err) => {
-            println!("{}", err);
-            Err(err)
-        }
-    };
-    result
+use crate::gui::AppState;
+
+// TODO: make configurable
+const BATCH_SIZE: usize = 10;
+#[derive(Debug, Default, Clone)]
+pub struct Data {
+    pub status: StatusCode,
+    pub version: Version,
+    pub headers: HeaderMap,
+    pub content_length: u64,
+    pub url: String,
+    pub text: String,
 }
 
-pub fn fuzz(wordlist: &str, host: &str, query_results: &Arc<Mutex<HashMap<String, StatusCode>>>) {
+async fn request_url(client: &Client, url: &str, _method: Method) -> Result<Data, reqwest::Error> {
+    match client.get(url).send().await {
+        Ok(response) => {
+            let mut ret = Data {
+                status: response.status(),
+                version: response.version(),
+                headers: response.headers().clone(),
+                content_length: u64::default(),
+                url: response.url().to_string(),
+                text: String::default(),
+            };
+            match &response.content_length() {
+                Some(len) => ret.content_length = *len,
+                _ => {}
+            }
+            match &response.text().await {
+                Ok(text) => ret.text = text.to_string(),
+                _ => {}
+            }
+            Ok(ret)
+        }
+        Err(err) => Err(err)
+    }
+}
 
-    let wordlist = File::open(wordlist).expect("Wordlist not found");
-    let wordlist = io::BufReader::new(wordlist).lines();
+async fn process_batch(client: &Client, target: &String, words: Vec<String>) -> Vec<Data>{
+    let mut handles = vec![];
+    let results: Arc<Mutex<Vec<Data>>> = Arc::default();
+
+    for word in words {
+        let client = client.clone();
+        let url = target.replace("FUZZ", &word);
+        let results = results.clone();
+
+        let handle = tokio::spawn(async move {
+            let result = request_url(&client, &url, Method::GET).await;
+            if result.is_ok(){
+                let data = result.unwrap();
+                let mut results = results.lock().unwrap();
+                results.push(data);
+            }
+        });
+        handles.push(handle);
+    }
+    futures::future::join_all(handles).await;
+
+    let results = results.lock().unwrap();
+    results.to_vec()
+}
+
+pub fn fuzz(gui_params: &mut AppState) {
+
+    // read entire wordlist to memory, this might not be smart
+    let wordlist = fs::read_to_string(&gui_params.wordlist).expect("Failed to find wordlist");
+    let wordlist: Vec<String> = wordlist.lines().map(|line| line.to_string()).collect();
+    let batches: Vec<Vec<String>> = wordlist
+        .chunks(BATCH_SIZE)
+        .map(|chunk| chunk.to_vec())
+        .collect();
 
     // really no point in continuing execution if this doesn't work
     let rt = Runtime::new().expect("Failed to create Async runtime");
-
     rt.block_on(async {
         let client = Client::new();
 
         let test_str: String = rand::thread_rng().sample_iter(&Alphanumeric).take(15).map(char::from).collect();
-        let test_url = format!("{}{}", &host, &test_str);
-        let test_res = client.get(&test_url).send().await;
-
-        match test_res {
+        let test_url = format!("{}{}", &gui_params.target, &test_str);
+        let _ = match client.get(&test_url).send().await {
             Err(err) => {
-                println!("Get request to {} failed!", &test_url);
-                println!("Error: {}", err);
-                println!("Exiting...");
-                process::exit(1);
+                Err(err)
             }
-            _ => {} 
+            _ => Ok(())
         };
-
-        let _ = stream::iter(wordlist.into_iter().map(|word| {
-            let client = client.clone();
-            let query_results = query_results.clone();
-            let url = format!("{}{}", &host, &word.unwrap());
-
-            tokio::spawn(async move {
-                // println!("Requesting...");
-                let result = request_url(&client, &url).await;
-                match result {
-                    Ok(result) => {
-                        // lock only panicks when current thread already holds mutex
-                        let mut map = query_results.lock().unwrap(); 
-                        map.insert(result.0, result.1);
-                    }
-                    _ => ()
-                }
-            })
-        }))
-        .buffer_unordered(100)
-        .collect::<Vec<_>>()
-        .await;
+        for batch in batches{
+            let batch_results: Vec<Data> = process_batch(&client, &gui_params.target, batch).await;
+            gui_params.query_results.extend(batch_results);
+        };
     });
-    
 }
 

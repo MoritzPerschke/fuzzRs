@@ -1,11 +1,6 @@
-use std::collections::HashMap;
-use std::sync::{ Arc, Mutex };
-use std::io::{ self };
+use std::fmt::format;
 
-use futures::{stream, StreamExt};
 use ratatui::prelude::*;
-use reqwest::{header, StatusCode};
-
 use ratatui::{
     buffer::Buffer,
     layout::{Alignment, Rect},
@@ -30,20 +25,20 @@ pub struct Gui {
     exit: bool,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct AppState {
-    target: String,
-    wordlist: String,
-    data: String,
-    headers: String,
-    matchrules: String,
-    filterrules: String,
-    query_results: Arc<Mutex<HashMap<String, StatusCode>>>,
+    pub target: String,
+    pub wordlist: String,
+    pub data: Vec<String>,
+    pub headers: Vec<String>,
+    pub matchrules: Vec<String>,
+    pub filterrules: Vec<String>,
+    pub query_results: Vec<fuzzer::Data>,
 }
 
 impl Gui {
-    pub fn run(&mut self, terminal: &mut DefaultTerminal) -> io::Result<()> {
-        let mut state = AppState::default();
+    pub fn run(&mut self, terminal: &mut DefaultTerminal) -> Result<(), Box<dyn std::error::Error>> {
+        // let state = AppState::default();
 
         /*
         * 0: Target
@@ -61,8 +56,7 @@ impl Gui {
             ("Filterrules", TextArea::default()),
         ];
         let mut current_input: usize = 0;
-
-        for i in 0..input_fields.len(){
+        for i in 1..input_fields.len(){
             input_fields[i].1.set_cursor_style(Style::default());
             input_fields[i].1.set_block(
                 Block::default()
@@ -70,15 +64,24 @@ impl Gui {
                     .title(input_fields[i].0),
             );
         }
+        input_fields[0].1.set_cursor_style(Style::default().add_modifier(Modifier::REVERSED).add_modifier(Modifier::RAPID_BLINK));
+        input_fields[0].1.set_block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(input_fields[0].0),
+        );
 
-        while !self.exit {
-            terminal.draw(|frame| self.draw(frame, &mut state, &input_fields))?;
+        loop {
+            terminal.draw(|frame| self.draw(frame, &input_fields))?;
             self.handle_events(&mut input_fields, &mut current_input)?;
+            if self.exit {
+                break;
+            }
         }
         Ok(())
     }
     
-    fn draw(&self, f: &mut Frame, state: &mut AppState, input_fields: &[(&str, TextArea); 6]) {
+    fn draw(&mut self, f: &mut Frame, input_fields: &[(&str, TextArea); 6]) {
         /* Definitions of Layouts */
         let root_layout = Layout::vertical(
             vec![
@@ -126,25 +129,23 @@ impl Gui {
         ).split(body_layout[1]);
 
         /* Header Bar */
-        // doesn't need to be stateful methinks
-        f.render_stateful_widget(HeaderWidget, root_layout[0], state);
+        f.render_widget(HeaderWidget, root_layout[0]);
 
         /* Body */
-        // Input fields are rendered here for convenience, as rendering them in a widget introduces
         f.render_widget(&input_fields[0].1, input_layout[0]);
         f.render_widget(&input_fields[1].1, input_layout[1]);
         f.render_widget(&input_fields[2].1, dh_layout[0]);
         f.render_widget(&input_fields[3].1, dh_layout[1]);
         f.render_widget(&input_fields[4].1, fm_layout[0]);
         f.render_widget(&input_fields[5].1, fm_layout[1]);
-        f.render_widget(EmptyWidget {title: "Results".to_string()}, right_body_layout[0]);
+        f.render_stateful_widget(ResultsWidget, right_body_layout[0], self);
         f.render_widget(HelpWidget {}, right_body_layout[1]);
     }
 
-    fn handle_events(&mut self, input_fields: &mut [(&str, TextArea); 6], active_input: &mut usize) -> io::Result<()> {
+    fn handle_events(&mut self, input_fields: &mut [(&str, TextArea); 6], active_input: &mut usize) -> Result<(), Box<dyn std::error::Error>> {
         match crossterm::event::read()?.into() {
             Input {key: Key::Char('q'), ctrl: true, ..} => self.exit(),
-            Input {key: Key::Char('r'), ctrl: true, ..} => fuzzer::fuzz(&self.state.wordlist, &self.state.target, &self.state.query_results),
+            Input {key: Key::Char('r'), ctrl: true, ..} => fuzzer::fuzz(&mut self.state),
             Input {key: Key::Char('t'), ctrl: true, ..} => self.change_active_input(input_fields, 0, active_input),
             Input {key: Key::Char('w'), ctrl: true, ..} => self.change_active_input(input_fields, 1, active_input),
             Input {key: Key::Char('d'), ctrl: true, ..} => self.change_active_input(input_fields, 2, active_input),
@@ -153,9 +154,15 @@ impl Gui {
             Input {key: Key::Char('f'), ctrl: true, ..} => self.change_active_input(input_fields, 5, active_input),
             input => {
                 input_fields[*active_input].1.input(input);
-                // match *active_input {
-                //     0 => stream::iter(input_fields[0].1.lines().into_iter().map(|line| {line.parse()})).collect::<Vec<String>>()
-                // }
+                match *active_input {
+                    0 => self.state.target = input_fields[0].1.lines().first().unwrap().to_string(),
+                    1 => self.state.wordlist = input_fields[1].1.lines().first().unwrap().to_string(),
+                    2 => self.state.data = input_fields[2].1.lines().to_vec(),
+                    3 => self.state.headers = input_fields[3].1.lines().to_vec(),
+                    4 => self.state.matchrules = input_fields[4].1.lines().to_vec(),
+                    5 => self.state.filterrules = input_fields[5].1.lines().to_vec(),
+                    _ => {}
+                }
             }
         };
         Ok(())
@@ -167,19 +174,31 @@ impl Gui {
 
     fn change_active_input(&mut self, input_fields: &mut [(&str, TextArea); 6], next_active: usize, current_active: &mut usize) {
         input_fields[*current_active].1.set_cursor_style(Style::default());
-        input_fields[*current_active].1.set_cursor_line_style(Style::default());
-        input_fields[next_active].1.set_cursor_style(Style::default().add_modifier(Modifier::REVERSED));
-        input_fields[next_active].1.set_cursor_line_style(Style::default().add_modifier(Modifier::UNDERLINED));
+        input_fields[next_active].1.set_cursor_style(Style::default().add_modifier(Modifier::REVERSED).add_modifier(Modifier::RAPID_BLINK));
         *current_active = next_active;
     }
     
 }
 
-struct HeaderWidget;
-impl StatefulWidget for HeaderWidget {
-    type State = AppState;
+struct ResultsWidget;
+impl StatefulWidget for ResultsWidget{
+    type State = Gui;
+    fn render(self, area: Rect, buf: &mut Buffer, gui: &mut Gui) {
+        let lines: Vec<Line> = gui.state.query_results.iter().map(|result| {
+                Line::from(format!("{}: {} [Length: {}]", result.url, result.status, result.content_length))
+                    .alignment(Alignment::Left)
+        }).collect();
 
-    fn render(self, area: Rect, buf: &mut Buffer, state: &mut AppState) {
+        Paragraph::new(Text::from(lines))
+            .centered()
+            .block(Block::bordered().border_set(border::PLAIN).title(" Results "))
+            .render(area, buf)
+    }
+}
+
+struct HeaderWidget;
+impl Widget for HeaderWidget {
+    fn render(self, area: Rect, buf: &mut Buffer) {
 
         let header_layout = Layout::horizontal(
             vec![
