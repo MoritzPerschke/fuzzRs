@@ -19,6 +19,7 @@ pub struct Data {
     pub text: String,
 }
 
+/* do the one request */
 async fn request_url(client: &Client, url: &str, _method: Method) -> Result<Data, reqwest::Error> {
     match client.get(url).send().await {
         Ok(response) => {
@@ -53,6 +54,7 @@ async fn process_batch(client: &Client, target: &String, words: Vec<String>) -> 
         let url = target.replace("FUZZ", &word);
         let results = results.clone();
 
+        // spawn a tokio task for every word in the batch for concurrent processing
         let handle = tokio::spawn(async move {
             let result = request_url(&client, &url, Method::GET).await;
             if result.is_ok(){
@@ -63,6 +65,7 @@ async fn process_batch(client: &Client, target: &String, words: Vec<String>) -> 
         });
         handles.push(handle);
     }
+    // wait for all tasks to finish
     futures::future::join_all(handles).await;
 
     let results = results.lock().unwrap();

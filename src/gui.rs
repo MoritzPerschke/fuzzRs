@@ -1,5 +1,3 @@
-use std::fmt::format;
-
 use ratatui::prelude::*;
 use ratatui::{
     buffer::Buffer,
@@ -38,8 +36,6 @@ pub struct AppState {
 
 impl Gui {
     pub fn run(&mut self, terminal: &mut DefaultTerminal) -> Result<(), Box<dyn std::error::Error>> {
-        // let state = AppState::default();
-
         /*
         * 0: Target
         * 1: Wordlist
@@ -85,15 +81,15 @@ impl Gui {
         /* Definitions of Layouts */
         let root_layout = Layout::vertical(
             vec![
-                Constraint::Percentage(20),
-                Constraint::Percentage(80)
+                Constraint::Percentage(20), // header bar
+                Constraint::Percentage(80)  // main body
             ]
         ).split(f.area());
 
         let body_layout = Layout::horizontal(
             vec![
-                Constraint::Percentage(60),
-                Constraint::Percentage(40)
+                Constraint::Percentage(60), // input windows
+                Constraint::Percentage(40)  // results window and help
             ]
         ).split(root_layout[1]);
 
@@ -108,23 +104,23 @@ impl Gui {
 
         let dh_layout = Layout::horizontal(
             vec![
-                Constraint::Percentage(50),
-                Constraint::Percentage(50),
+                Constraint::Percentage(50), // data
+                Constraint::Percentage(50), // headers
             ]
         ).split(input_layout[2]);
 
         let fm_layout = Layout::horizontal(
             vec![
-                Constraint::Percentage(50),
-                Constraint::Percentage(50),
+                Constraint::Percentage(50), // matchrules
+                Constraint::Percentage(50), // filterrules
             ]
         ).split(input_layout[3]);
 
         // this can be moved to future 'rightwidget' or whatever
         let right_body_layout = Layout::vertical(
             vec![
-                Constraint::Percentage(70),
-                Constraint::Percentage(30)
+                Constraint::Percentage(70), // results
+                Constraint::Percentage(30)  // help
             ]
         ).split(body_layout[1]);
 
@@ -132,12 +128,14 @@ impl Gui {
         f.render_widget(HeaderWidget, root_layout[0]);
 
         /* Body */
+        // render input field in the corresponding area as a widget
         f.render_widget(&input_fields[0].1, input_layout[0]);
         f.render_widget(&input_fields[1].1, input_layout[1]);
         f.render_widget(&input_fields[2].1, dh_layout[0]);
         f.render_widget(&input_fields[3].1, dh_layout[1]);
         f.render_widget(&input_fields[4].1, fm_layout[0]);
         f.render_widget(&input_fields[5].1, fm_layout[1]);
+        // render other widgets
         f.render_stateful_widget(ResultsWidget, right_body_layout[0], self);
         f.render_widget(HelpWidget {}, right_body_layout[1]);
     }
@@ -153,6 +151,7 @@ impl Gui {
             Input {key: Key::Char('m'), ctrl: true, ..} => self.change_active_input(input_fields, 4, active_input),
             Input {key: Key::Char('f'), ctrl: true, ..} => self.change_active_input(input_fields, 5, active_input),
             input => {
+                // 'give' the input of the window to the input field based on 'acitve_input'
                 input_fields[*active_input].1.input(input);
                 match *active_input {
                     0 => self.state.target = input_fields[0].1.lines().first().unwrap().to_string(),
